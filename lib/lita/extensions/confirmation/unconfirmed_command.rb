@@ -63,8 +63,6 @@ module Lita
 
           @allow_self = options.key?(:allow_self) ? options[:allow_self] : true
           @groups = options.key?(:restrict_to) ? Array(options[:restrict_to]) : nil
-          # @twofactor = options.key?(:twofactor) ? validate_twofactor(options[:twofactor])
-          #   : Lita.config.handlers.confirmation.twofactor_default
 
           expiry = options.key?(:expire_after) ? options[:expire_after] : 60
           @timer_thread = Thread.new do

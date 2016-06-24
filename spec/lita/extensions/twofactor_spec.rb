@@ -23,9 +23,8 @@ class Important < Lita::Handler
   end
 end
 
-describe Important, lita_handler: true do
+describe Lita::Handlers::Confirmation, lita_handler: true, additional_lita_handlers: Important do
   before do
-    registry.register_handler(Lita::Handlers::Confirmation)
     registry.register_hook(:validate_route, Lita::Extensions::Confirmation)
     Lita::Extensions::Confirmation::UnconfirmedCommand.reset
   end
@@ -43,6 +42,30 @@ describe Important, lita_handler: true do
     it "lets the user enroll" do
       send_command("confirm 2fa enroll")
       expect(replies.last).to match(/Your secret code is [a-z0-9]{16}/)
+    end
+
+    it "does not allow a user to enroll twice" do
+      send_command("confirm 2fa enroll")
+      send_command("confirm 2fa enroll")
+      expect(replies.last).to match(/you cannot re-enroll/)
+    end
+
+    it "does not allow a non-privileged user to remove themselves" do
+      send_command("confirm 2fa enroll")
+      send_command("confirm 2fa remove")
+      expect(replies.last).to match(/this action can only be performed by a Lita administrator/)
+    end
+
+    it "does not allow a non-privileged user to remove others" do
+      send_command("confirm 2fa remove joe")
+      expect(replies.last).to match(/this action can only be performed by a Lita administrator/)
+    end
+  end
+
+  context "with lax security setings" do
+    before do
+      allow_any_instance_of(Lita::Handlers::Confirmation).to receive(:config)
+        .and_return(double('Lita::Configuration', twofactor_secure: false))
     end
 
     it "lets the user opt out" do
