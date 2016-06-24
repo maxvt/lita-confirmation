@@ -4,7 +4,7 @@ module Lita
   module Extensions
     class Confirmation
       class UnconfirmedCommand
-        attr_reader :allow_self, :code, :groups, :handler, :message, :robot, :route, :timer_thread
+        attr_reader :allow_self, :code, :groups, :handler, :message, :robot, :route, :timer_thread, :twofactor
 
         class << self
           def find(code)
@@ -20,14 +20,14 @@ module Lita
           end
         end
 
-        def initialize(handler, message, robot, route, options)
+        def initialize(handler, message, robot, route, twofactor, options)
           @handler = handler
           @message = message
           @robot = robot
           @route = route
+          @twofactor = twofactor
 
           @code = SecureRandom.hex(3)
-
           self.class.confirmations[code] = self
 
           process_options(options)
@@ -63,6 +63,8 @@ module Lita
 
           @allow_self = options.key?(:allow_self) ? options[:allow_self] : true
           @groups = options.key?(:restrict_to) ? Array(options[:restrict_to]) : nil
+          # @twofactor = options.key?(:twofactor) ? validate_twofactor(options[:twofactor])
+          #   : Lita.config.handlers.confirmation.twofactor_default
 
           expiry = options.key?(:expire_after) ? options[:expire_after] : 60
           @timer_thread = Thread.new do
