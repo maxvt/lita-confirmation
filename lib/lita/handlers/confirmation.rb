@@ -1,4 +1,6 @@
+require "net/smtp"
 require "rotp"
+require "rqrcode"
 
 module Lita
   module Handlers
@@ -11,6 +13,10 @@ module Lita
       # and generate OTP passwords. This can be set to false during a transition to 2FA.
       config :twofactor_secure, required: false, type: [TrueClass, FalseClass], default: true
 
+      config :smtp_host, required: false, type: String, default: 'localhost'
+      config :smtp_port, required: false, type: Fixnum, default: 25
+      config :from_email, required: false, type: String, default: 'example@example.com'
+
       route /^confirm\s+([a-f0-9]{6})$/i, :confirm, command: true, help: {
         t("confirm_help.key") => t("confirm_help.value")
       }
@@ -19,7 +25,7 @@ module Lita
         t("confirm_totp_help.key") => t("confirm_totp_help.value")
       }
 
-      route /^confirm\s+2fa\s+enroll$/i,
+      route /^confirm\s+2fa\s+enroll\s+(.*)\s*$/i,
         :enroll, command:true, help: { t("enroll_help.key") => t("enroll_help.value") }
 
       route /^confirm\s+2fa\s+remove$/i, :remove_self, command: true, help: {
@@ -69,10 +75,21 @@ module Lita
       end
 
       def enroll(response)
+        email = response.matches[0][0]
+        unless email =~ /\A[^@\s]+@([^@\s]+\.)+[^@\s]+\z/
+          response.reply(t("enroll_email_failed_validation"))
+          return
+        end
+
         totp = ROTP::Base32.random_base32
         unless redis.hget(response.user.id, "totp") && config.twofactor_secure
-          redis.hset(response.user.id, "totp", totp)
-          response.reply(t("enrolled", totp: totp))
+          begin
+            send_enroll_email(response.user, email, totp)
+            redis.hset(response.user.id, "totp", totp)
+            response.reply(t("enrolled"))
+          rescue Exception => e
+            response.reply(t("email_error", error: e.message))
+          end
         else
           response.reply(t("must_remove_to_reenroll"))
         end
@@ -116,6 +133,32 @@ module Lita
           response.reply(
             t("user_in_group_required", code: code, groups: command.groups.join(", "))
           )
+        end
+      end
+
+      def send_enroll_email(user, email, totp_secret)
+        totp = ROTP::TOTP.new(totp_secret)
+        provisioning_url = "otpauth://totp/OfficerURL:#{email}?secret=#{totp_secret}&issuer=OfficerURL"
+        qrcode = RQRCode::QRCode.new(provisioning_url)
+
+        message = <<MESSAGE_END
+From: "#{robot.name}" <#{config.from_email}>
+To: "#{user.name}" <#{email}>
+MIME-Version: 1.0
+Content-type: multipart/mixed; boundary=NEXTPART
+#{t("enroll_email", robot_name: robot.name, user_name: user.name, secret: totp_secret )}
+
+--NEXTPART
+Content-Type: image/png; name="qrcode.png"
+Content-Transfer-Encoding:base64
+Content-Disposition: attachment; filename="qrcode.png"
+
+#{[qrcode.as_png(size: 640).to_s].pack("m")}
+
+MESSAGE_END
+
+        Net::SMTP.start(config.smtp_host, config.smtp_port) do |smtp|
+          smtp.send_message message, 'devnull@pagerduty.com', email
         end
       end
     end
