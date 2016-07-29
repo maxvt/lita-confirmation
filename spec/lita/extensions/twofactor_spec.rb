@@ -1,14 +1,15 @@
 require "spec_helper"
+require "net/smtp"
 require "rotp"
 
 class Important < Lita::Handler
-  route /^unimportant$/, :unimportant, command: true, confirmation: { twofactor: 'block' }
+  route /^unimportant$/, :unimportant, command: true, confirmation: { twofactor: :block }
 
-  route /^danger$/, :danger, command: true, confirmation: { twofactor: 'allow' }
+  route /^danger$/, :danger, command: true, confirmation: { twofactor: :allow }
 
-  route /^critical$/, :critical, command: true, confirmation: { twofactor: 'require' }
+  route /^critical$/, :critical, command: true, confirmation: { twofactor: :require }
 
-  route /^invalid$/, :critical, command: true, confirmation: { twofactor: 'foobar' }
+  route /^invalid$/, :critical, command: true, confirmation: { twofactor: :foobar }
 
   def unimportant(response)
     response.reply("Trivial command executed!")
@@ -29,29 +30,53 @@ describe Lita::Handlers::Confirmation, lita_handler: true, additional_lita_handl
     Lita::Extensions::Confirmation::UnconfirmedCommand.reset
   end
 
+  let(:mailer) do
+    mailer = double(Net::SMTP)
+    @messages = []
+    allow(mailer).to receive(:send_message) do |msg, from, to|
+      @messages << {
+        msg: msg,
+        to: to
+      }
+    end
+    mailer
+  end
+
   it "does not accept invalid config values" do
     expect { send_command("invalid") }.to raise_error(RuntimeError, /not a valid value for Confirmation's twofactor option/)
   end
 
   context "with user not enrolled into 2fa" do
+    before do
+      allow(Net::SMTP).to receive(:start).and_yield(mailer)
+    end
+
     it "does not allow routes that require 2fa" do
       send_command("critical")
       expect(replies.last).to match(/you have not set up two-factor authentication/)
     end
 
     it "lets the user enroll" do
-      send_command("confirm 2fa enroll")
-      expect(replies.last).to match(/Your secret code is [a-z0-9]{16}/)
+      send_command("confirm 2fa enroll foo@example.com")
+      expect(replies.last).to match(/You are now enrolled/)
+      expect(@messages.size).to eq(1)
+      expect(@messages.first[:to]).to eq('foo@example.com')
     end
 
     it "does not allow a user to enroll twice" do
-      send_command("confirm 2fa enroll")
-      send_command("confirm 2fa enroll")
+      send_command("confirm 2fa enroll foo@example.com")
+      send_command("confirm 2fa enroll foo@example.com")
       expect(replies.last).to match(/you cannot re-enroll/)
+      expect(@messages.size).to eq(1)
+    end
+
+    it "does not accept junk as email address" do
+      send_command("confirm 2fa enroll foo")
+      expect(replies.last).to match(/does not appear valid/)
     end
 
     it "does not allow a non-privileged user to remove themselves" do
-      send_command("confirm 2fa enroll")
+      send_command("confirm 2fa enroll foo@example.com")
       send_command("confirm 2fa remove")
       expect(replies.last).to match(/this action can only be performed by a Lita administrator/)
     end
@@ -59,6 +84,21 @@ describe Lita::Handlers::Confirmation, lita_handler: true, additional_lita_handl
     it "does not allow a non-privileged user to remove others" do
       send_command("confirm 2fa remove joe")
       expect(replies.last).to match(/this action can only be performed by a Lita administrator/)
+    end
+  end
+
+  context "with email being sad" do
+    before do
+      sad_mailer = double(Net::SMTP)
+      allow(sad_mailer).to receive(:send_message) do
+        raise "The mailer is sad, no mail can be sent"
+      end
+       allow(Net::SMTP).to receive(:start).and_yield(sad_mailer)
+    end
+
+    it 'does not enroll a user when email cannot be sent' do
+      send_command("confirm 2fa enroll foo@example.com")
+      expect(replies.last).to match(/Could not send email/)
     end
   end
 
@@ -76,8 +116,9 @@ describe Lita::Handlers::Confirmation, lita_handler: true, additional_lita_handl
 
   context "with user enrolled into 2fa" do
     before do
-      send_command("confirm 2fa enroll")
-      code = /([a-z0-9]{16})/.match(replies.last).captures[0]
+      allow(Net::SMTP).to receive(:start).and_yield(mailer)
+      send_command("confirm 2fa enroll foo@example.com")
+      code = /([a-z0-9]{16})/.match(@messages.first[:msg])[0]
       @totp = ROTP::TOTP.new(code)
     end
 
@@ -121,6 +162,30 @@ describe Lita::Handlers::Confirmation, lita_handler: true, additional_lita_handl
       manager = Lita::User.create(123)
       send_command("confirm #{code} 000000", as: manager)
       expect(replies.last).to match(/Please enroll in two-factor confirmation/)
+    end
+  end
+
+  context "with admin user" do
+    let(:boss) do
+      boss = Lita::User.create(123)
+      robot.auth.add_user_to_group!(boss, :confirmation_admin)
+      boss
+    end
+
+    let(:minion) do
+      minion = Lita::User.create(456, {'mention_name': 'panda'})
+      minion
+    end
+
+    it 'does not let the boss unenroll a non-existent user' do
+      send_command("confirm 2fa remove joe", as: boss)
+      expect(replies.last).to match(/No such user/)
+    end
+
+    it 'unenrolls another user' do
+      send_command("confirm 2fa enroll foo@example.com", as: minion)
+      send_command("confirm 2fa remove panda", as: boss)
+      expect(replies.last).to match(/will no longer be prompted/)
     end
   end
 end

@@ -61,6 +61,9 @@ module Lita
 
       def parse_twofactor_option(options)
         if options.is_a?(Hash) && options[:twofactor]
+          unless %i(block allow require).include? options[:twofactor]
+            raise "#{options[:twofactor]} is not a valid value for Confirmation's twofactor option"
+          end
           options[:twofactor]
         else
           Lita.config.handlers.confirmation.twofactor_default
