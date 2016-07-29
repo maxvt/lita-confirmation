@@ -6,7 +6,7 @@ module Lita
   module Handlers
     class Confirmation < Handler
       # block - never use 2fa; allow; require - only allow 2fa
-      config :twofactor_default, required: false, type: String, default: 'block'
+      config :twofactor_default, required: false, type: [:block, :allow, :require], default: :block
 
       # If users can re-enroll or remove themselves, there is no true "second factor"
       # protection as control of Slack account lets an attacker re-enroll, obtain a new TOTP secret,

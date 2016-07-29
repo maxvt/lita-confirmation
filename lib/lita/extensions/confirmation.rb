@@ -61,9 +61,9 @@ module Lita
 
       def parse_twofactor_option(options)
         if options.is_a?(Hash) && options[:twofactor]
-          tvalue = validate_twofactor_option(options[:twofactor])
+          options[:twofactor]
         else
-          tvalue = Lita.config.handlers.confirmation.twofactor_default
+          Lita.config.handlers.confirmation.twofactor_default
         end
       end
 
@@ -73,15 +73,6 @@ module Lita
 
       def route_requires_twofactor?(options)
         :require == parse_twofactor_option(options)
-      end
-
-      def validate_twofactor_option(option_value_as_string)
-        sym = option_value_as_string.to_sym
-        if %i(block allow require).include? sym
-          sym
-        else
-          raise "#{option_value_as_string} is not a valid value for Confirmation's twofactor option"
-        end
       end
     end
 
